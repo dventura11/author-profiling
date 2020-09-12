@@ -6,7 +6,7 @@ from time import sleep
 import logging
 from keras.models import load_model
 from datetime import datetime
-from clean_parse_tsv import generate_df
+from clean_parse_json import generate_df
 from parse_xml_files import generate_df_on_the_fly
 import numpy as np
 from sklearn.utils import shuffle
@@ -14,6 +14,7 @@ import xml.etree.cElementTree as ET
 from keras.preprocessing.sequence import pad_sequences
 import pickle
 
+# TODO update to support json files approach
 pan_dir_path = '/home/faerber19/AuthorProfiling/' # '/vol3/AuthorProfiling/'
 logging.basicConfig(filename='{}/logs/preidctions_log.log'.format(pan_dir_path), filemode='w', 
                     format='%(asctime)s : %(levelname)s : %(message)s', level=logging.INFO)
