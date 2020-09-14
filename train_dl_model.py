@@ -28,7 +28,7 @@ def load_data(dataset_name):
     data_frame = pd.read_pickle(data_frame_file)
     data_frame = data_frame[[TIMELINE_COLUMN, TARGET_COLUMN]]
     print_classes('full', data_frame[TARGET_COLUMN])
-    train_df, test_df = train_test_split(data_frame, test_size=0.3, random_state=11, shuffle=True)
+    train_df, test_df = train_test_split(data_frame, test_size=0.3, random_state=1092, shuffle=True)
     return train_df[TIMELINE_COLUMN], train_df[TARGET_COLUMN], test_df[TIMELINE_COLUMN], test_df[TARGET_COLUMN]
 
 
