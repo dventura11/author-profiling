@@ -5,6 +5,7 @@ import clean_parse_json as cleaner
 import numpy as np
 import pandas as pd
 from sklearn import metrics
+from sklearn.model_selection import train_test_split
 from keras.models import Sequential, load_model
 from keras.layers import Dense, Dropout, Conv1D, MaxPooling1D, Embedding, GlobalMaxPooling1D
 from keras.preprocessing.text import Tokenizer
@@ -12,47 +13,23 @@ from keras import callbacks, optimizers
 from keras.preprocessing.sequence import pad_sequences
 from keras.utils import plot_model
 import pickle
-from gensim.models import KeyedVectors
 
 file_path = ''
 MODEL_NAME = 'dl_model'
 TARGET_COLUMN = "target"
-TIMELINE_COLUmn = "timeline"
-
-
-def evaluate_model(model, x_test, y_test):
-
-    y_predict = (np.asarray(model.predict(x_test))).round()
-
-    acc = metrics.accuracy_score(y_test, y_predict)
-    logging.info('Accuracy: {}'.format(acc))
-
-    conf_matrix = metrics.confusion_matrix(y_test, y_predict)
-    logging.info('Confusion matrix: {}'.format(conf_matrix))
-
-    precision = metrics.precision_score(y_test, y_predict)
-    logging.info('Precision score: {}'.format(precision))
-
-    recall = metrics.recall_score(y_test, y_predict)
-    logging.info('Recall score: {}'.format(recall))
-
-    val_f1 = metrics.f1_score(y_test, y_predict)
-    logging.info('F1 score: {}'.format(val_f1))
-
-    val_auc = metrics.roc_auc_score(y_test, y_predict)
-    logging.info('Auc score: {}'.format(val_auc))
-
-    model_plot_file = os.path.join(file_path, 'data', 'models', '{}.png'.format(MODEL_NAME))
-    plot_model(model, to_file=model_plot_file, show_shapes=True, show_layer_names=True)
+TIMELINE_COLUMN = "timeline"
 
 
 def load_data(dataset_name):
-    df_file = os.path.join(file_path, 'data', dataset_name + '.pkl')
-    if not os.path.exists(df_file):
+    data_frame_file = os.path.join(file_path, 'data', dataset_name + '.pkl')
+    if not os.path.exists(data_frame_file):
         dataset_file_path = os.path.join(file_path, 'data', dataset_name + '.json')
-        cleaner.process_data(dataset_name)
-    df = pd.read_pickle(df_file)
-    return df[TIMELINE_COLUmn], df[TARGET_COLUMN]
+        cleaner.process_data(dataset_file_path)
+    data_frame = pd.read_pickle(data_frame_file)
+    data_frame = data_frame[[TIMELINE_COLUMN, TARGET_COLUMN]]
+    print_classes('full', data_frame[TARGET_COLUMN])
+    train_df, test_df = train_test_split(data_frame, test_size=0.3, random_state=11, shuffle=True)
+    return train_df[TIMELINE_COLUMN], train_df[TARGET_COLUMN], test_df[TIMELINE_COLUMN], test_df[TARGET_COLUMN]
 
 
 def load_tokenizer(x_train, num_words=None):
@@ -74,6 +51,12 @@ def load_tokenizer(x_train, num_words=None):
         logging.info('Tokenizer fit on texts and stored on disk')
 
         return tokenizer
+
+
+def load_pretrained_model(model_name):
+    model_file = os.path.join(file_path, 'data', 'models', "{}.h5".format(model_name))
+    model = load_model(model_file)
+    return model
 
 
 def define_conv_model(tokenizer, seq_len, filters=64, kernel_size=4, hidden_dims=256):
@@ -146,10 +129,33 @@ def train_model(model, x_train, y_train, x_test, y_test, batch_size, learning_ra
     logging.info('Model stored on disk.')
 
 
-def load_pretrained_model(model_name):
-    model_file = os.path.join(file_path, 'data', 'models', "{}.h5".format(model_name))
-    model = load_model(model_file)
-    return model
+def evaluate_model(model, x_test, y_test):
+    y_predict = (np.asarray(model.predict(x_test))).round()
+
+    acc = metrics.accuracy_score(y_test, y_predict)
+    logging.info('Accuracy: {}'.format(acc))
+    print_classes('expected', y_test)
+    print_classes('predict', y_predict)
+    conf_matrix = metrics.confusion_matrix(y_test, y_predict)
+    logging.info('Confusion matrix:\n {}'.format(conf_matrix))
+
+    tn, fp, fn, tp = metrics.confusion_matrix(y_test, y_predict).ravel()
+    print('tp: {}\nfp: {}\ntn: {}\nfn: {}'.format(tp, fp, tn, fn))
+
+    precision = metrics.precision_score(y_test, y_predict)
+    logging.info('Precision score: {}'.format(precision))
+
+    recall = metrics.recall_score(y_test, y_predict)
+    logging.info('Recall score: {}'.format(recall))
+
+    val_f1 = metrics.f1_score(y_test, y_predict)
+    logging.info('F1 score: {}'.format(val_f1))
+
+    val_auc = metrics.roc_auc_score(y_test, y_predict)
+    logging.info('Auc score: {}'.format(val_auc))
+
+    model_plot_file = os.path.join(file_path, 'data', 'models', '{}.png'.format(MODEL_NAME))
+    plot_model(model, to_file=model_plot_file, show_shapes=True, show_layer_names=True)
 
 
 def print_classes(dataset_type, y_data):
@@ -160,7 +166,9 @@ def print_classes(dataset_type, y_data):
             bots += 1
         else:
             humans += 1
+    print('----------------------------------------')
     print('dataset type: {}'.format(dataset_type))
+    print('dataset size: {}'.format(len(y_data)))
     print('bots length: {}'.format(bots))
     print('humans length: {}'.format(humans))
 
@@ -189,9 +197,7 @@ def main():
     learning_rate = float(args.learning_rate)
     batch_size = 32
     model_name = args.model
-
-    x_train, y_train = load_data('train')
-    x_test, y_test = load_data('test')
+    x_train, y_train, x_test, y_test = load_data('dataset')
     lengths = np.array([len(text) for text in x_train])
     print('Count: {}'.format(len(lengths)))
     print('Data loaded successfully')
@@ -210,8 +216,8 @@ def main():
     train_sequences = tokenizer.texts_to_sequences(x_train)
     x_train = pad_sequences(train_sequences, maxlen=seq_length, padding='post')
 
-    val_sequences = tokenizer.texts_to_sequences(x_test)
-    x_test = pad_sequences(val_sequences, maxlen=seq_length, padding='post')
+    test_seq = tokenizer.texts_to_sequences(x_test)
+    x_test = pad_sequences(test_seq, maxlen=seq_length, padding='post')
 
     if model_name:
         model = load_pretrained_model(model_name)

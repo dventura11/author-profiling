@@ -66,19 +66,17 @@ def process_data(file_path):
 
 
 def main():
-    datasets = ['train', 'test']
     parser = argparse.ArgumentParser()
     parser.add_argument("--path", '-p', default=".",
                         help="Use this argument to change the training data directory')")
     args = parser.parse_args()
     data_path = args.path
     print("Data path: {}".format(data_path))
-    for dataset in datasets:
-        dataset_file_path = os.path.join(data_path, 'data', dataset + '.json')
-        if os.path.isfile(dataset_file_path):
-            process_data(dataset_file_path)
-        else:
-            print("file {} does not exits".format(dataset_file_path))
+    dataset_file_path = os.path.join(data_path, 'data', 'dataset.json')
+    if os.path.isfile(dataset_file_path):
+        process_data(dataset_file_path)
+    else:
+        print("file {} does not exits".format(dataset_file_path))
 
 if __name__ == "__main__":
     main()

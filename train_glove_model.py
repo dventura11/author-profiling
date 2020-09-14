@@ -1,190 +1,71 @@
 import argparse
 import os
-import os.path
 import logging
+import clean_parse_json as cleaner
 import numpy as np
 import pandas as pd
-import clean_parse_json as cleaner
 from sklearn import metrics
-import matplotlib.pyplot as plt
+from sklearn.model_selection import train_test_split
 from keras.models import Sequential, load_model
-from keras.layers import Dense, Dropout, SpatialDropout1D, Conv1D, MaxPooling1D, Activation, Embedding, Flatten, \
-    GlobalMaxPooling1D, LSTM
-from keras.preprocessing.text import Tokenizer
-from keras import regularizers, callbacks, optimizers
+from keras.layers import Dense, Dropout, Conv1D, MaxPooling1D, GlobalMaxPooling1D
+from keras import callbacks, optimizers
 from keras.preprocessing.sequence import pad_sequences
 from keras.utils import plot_model
 import pickle
 from gensim.models import KeyedVectors
 from gensim.scripts.glove2word2vec import glove2word2vec
 
-
-pan_dir = ''
-model_name = 'glove_model_a0_w0'
-target_column = "target"
-timeline_column = "timeline"
-text_column = "text"
-glove_file_name = 'glove.840B.300d.txt'
-# glove_file_name = 'glove.twitter.27B.200d.txt'
+file_path = ''
+MODEL_NAME = 'glove_model'
+TARGET_COLUMN = "target"
+TIMELINE_COLUMN = "timeline"
+GLOVE_FILE_NAME = 'glove.840B.300d.txt'
+# GLOVE_FILE_NAME = 'glove.twitter.27B.200d.txt'
 
 
-def evaluate_model(model, x_test, y_test):
-
-    y_predict = (np.asarray(model.predict(x_test))).round()
-
-    acc = metrics.accuracy_score(y_test, y_predict)
-    logging.info('Accuracy: {}'.format(acc))
-
-    conf_matrix = metrics.confusion_matrix(y_test, y_predict)
-    logging.info('Confusion matrix: {}'.format(conf_matrix))
-
-    precision = metrics.precision_score(y_test, y_predict)
-    logging.info('Precision score: {}'.format(precision))
-
-    recall = metrics.recall_score(y_test, y_predict)
-    logging.info('Recall score: {}'.format(recall))
-
-    val_f1 = metrics.f1_score(y_test, y_predict)
-    logging.info('F1 score: {}'.format(val_f1))
-
-    val_auc = metrics.roc_auc_score(y_test, y_predict)
-    logging.info('Auc score: {}'.format(val_auc))
-
-    model_plot_file = os.path.join(pan_dir, 'models', 'glove', '{}.png'.format(model_name))
-    plot_model(model, to_file=model_plot_file, show_shapes=True, show_layer_names=True)
+def load_data(dataset_name):
+    data_frame_file = os.path.join(file_path, 'data', dataset_name + '.pkl')
+    if not os.path.exists(data_frame_file):
+        dataset_file_path = os.path.join(file_path, 'data', dataset_name + '.json')
+        cleaner.process_data(dataset_file_path)
+    data_frame = pd.read_pickle(data_frame_file)
+    data_frame = data_frame[[TIMELINE_COLUMN, TARGET_COLUMN]]
+    print_classes('full', data_frame[TARGET_COLUMN])
+    train_df, test_df = train_test_split(data_frame, test_size=0.3, random_state=11, shuffle=True)
+    return train_df[TIMELINE_COLUMN], train_df[TARGET_COLUMN], test_df[TIMELINE_COLUMN], test_df[TARGET_COLUMN]
 
 
-def get_text(dict):
-    if timeline_column not in dict:
-        return
-    timeline = dict[timeline_column]
-    text = ""
-    for tweet in timeline:
-        if tweet["lang"] != "en":
-            continue
-        text += " " + tweet[text_column]
-    # text = cleaner.clean_text(text)
-    text = cleaner.process_text(text)
-    return text
-
-
-def get_data(file_path):
-    print('Loading {} data'.format(file_path))
-    df = pd.read_json(file_path)
-    df = df["data"]
-    print('preprocessing data')
-    x_train = df.apply(get_text)
-    y_train = df.apply(lambda dict: 1 if dict[target_column].strip() == "bot" else 0)
-    return x_train, y_train
-
-
-def load_data():
-    train_df_file = os.path.join(pan_dir, 'data', 'train.json')
-    test_df_file = os.path.join(pan_dir, 'data', 'test.json')
-    train_text, train_target = get_data(train_df_file)
-    test_text, test_target = get_data(test_df_file)
-    return train_text, train_target, test_text, test_target
-
-
-def create_embedding_weights_matrix(word_vectors, word_index, embedding_dims=300):
-    weights_matrix = np.zeros((len(word_index) + 1, embedding_dims))
-
-    count = 0
-    for word, idx in word_index.items():
-        if word in word_vectors:
-            weights_matrix[idx] = word_vectors[word]
-            count += 1
-    logging.info('Words found on word2vec: {}'.format(count))
-
-    return weights_matrix
-
-
-def load_embedding_layer(tokenizer, seq_len):
-    vocab_size = len(tokenizer.word_index) + 1
-    logging.info('Vocab size: {}'.format(vocab_size))
-
-    # Load word vectors
-    logging.info("Loading Glove word2vec vectors")
-    model = load_glove_model()
-    weights_matrix = create_embedding_weights_matrix(model.wv, tokenizer.word_index)
-
-    return Embedding(input_dim=vocab_size,
-                     output_dim=weights_matrix.shape[1],
-                     input_length=seq_len,
-                     weights=[weights_matrix],
-                     trainable=False
-                     )
-
-
-def define_conv_model(tokenizer, seq_len, filters=64, kernel_size=4, hidden_dims=256):
-    model = Sequential()
-
-    print('seq_len: {}'.format(seq_len))
-    embedding_layer = load_embedding_layer(tokenizer, seq_len=seq_len)
-
-    model.add(embedding_layer)
-    model.add(Dropout(0.5))
-
-    model.add(Conv1D(filters,
-                     kernel_size,
-                     activation='relu'))
-    model.add(Dropout(0.5))
-    # model.add(SpatialDropout1D(0.5))
-    model.add(MaxPooling1D(pool_size=4))
-
-    model.add(Conv1D(filters,
-                     kernel_size,
-                     activation='relu'))
-    model.add(Dropout(0.5))
-    model.add(MaxPooling1D(pool_size=4))
-
-    model.add(GlobalMaxPooling1D())
-    # model.add(Flatten())
-
-    model.add(Dense(hidden_dims,
-                    activation='relu'
-                    ))
-    model.add(Dropout(0.5))
-
-    model.add(Dense(1, activation='sigmoid'))
-
+def load_pretrained_model(model_name):
+    model_file = os.path.join(file_path, 'data', 'models', "{}.h5".format(model_name))
+    model = load_model(model_file)
     return model
 
 
-def define_deep_conv_model(tokenizer, seq_len, filters=64, kernel_size=4, hidden_dims=256):
+def define_conv_model(glove_model, filters=64, kernel_size=4, hidden_dims=256):
+    embedding_layer = glove_model.get_keras_embedding()
     model = Sequential()
-
-    vocab_size = len(tokenizer.word_index) + 1
-    print('seq_len: {}'.format(seq_len))
-    embedding_layer = Embedding(input_dim=vocab_size, output_dim=300, input_length=seq_len)
     model.add(embedding_layer)
     model.add(Dropout(0.5))
-
-    for i in range(0, 5):
-        model.add(Conv1D(filters,
-                         kernel_size,
-                         activation='relu'))
-        model.add(Dropout(0.5))
-        model.add(MaxPooling1D(pool_size=2))
-
-    # model.add(GlobalMaxPooling1D())
-    model.add(Flatten())
-
-    for i in range(0, 2):
-        model.add(Dense(hidden_dims,
-                        activation='relu'
-                        ))
-        model.add(Dropout(0.5))
-
+    model.add(Conv1D(filters, kernel_size, activation='relu'))
+    model.add(Dropout(0.5))
+    model.add(MaxPooling1D(pool_size=4))
+    model.add(Conv1D(filters, kernel_size, activation='relu'))
+    model.add(Dropout(0.5))
+    model.add(MaxPooling1D(pool_size=4))
+    model.add(GlobalMaxPooling1D())
+    model.add(Dense(hidden_dims, activation='relu'))
+    model.add(Dropout(0.5))
     model.add(Dense(1, activation='sigmoid'))
 
     return model
 
 
 def train_model(model, x_train, y_train, x_test, y_test, batch_size, learning_rate):
-    model_dir = os.path.join(pan_dir, 'data', 'models', 'glove')
-    model_location = os.path.join(model_dir, '{}.h5'.format(model_name))
-    model_weights_location = os.path.join(model_dir, '{}_weights.h5'.format(model_name))
+    model_dir = os.path.join(file_path, 'data', 'models')
+    if not os.path.exists(model_dir):
+        os.mkdir(model_dir)
+    model_location = os.path.join(model_dir, '{}.h5'.format(MODEL_NAME))
+    model_weights_location = os.path.join(model_dir, '{}_weights.h5'.format(MODEL_NAME))
 
     # Implement Early Stopping
     early_stopping_callback = callbacks.EarlyStopping(monitor='val_loss',
@@ -214,10 +95,56 @@ def train_model(model, x_train, y_train, x_test, y_test, batch_size, learning_ra
     logging.info('Model stored on disk.')
 
 
-def load_pretrained_model(model_name):
-    model_file = os.path.join(pan_dir, 'data', 'models', 'glove', "{}.h5".format(model_name))
-    model = load_model(model_file)
-    return model
+def evaluate_model(model, x_test, y_test):
+    y_predict = (np.asarray(model.predict(x_test))).round()
+
+    acc = metrics.accuracy_score(y_test, y_predict)
+    logging.info('Accuracy: {}'.format(acc))
+    print_classes('expected', y_test)
+    print_classes('predict', y_predict)
+    conf_matrix = metrics.confusion_matrix(y_test, y_predict)
+    logging.info('Confusion matrix:\n {}'.format(conf_matrix))
+
+    tn, fp, fn, tp = metrics.confusion_matrix(y_test, y_predict).ravel()
+    print('tp: {}\nfp: {}\ntn: {}\nfn: {}'.format(tp, fp, tn, fn))
+
+    precision = metrics.precision_score(y_test, y_predict)
+    logging.info('Precision score: {}'.format(precision))
+
+    recall = metrics.recall_score(y_test, y_predict)
+    logging.info('Recall score: {}'.format(recall))
+
+    val_f1 = metrics.f1_score(y_test, y_predict)
+    logging.info('F1 score: {}'.format(val_f1))
+
+    val_auc = metrics.roc_auc_score(y_test, y_predict)
+    logging.info('Auc score: {}'.format(val_auc))
+
+    model_plot_file = os.path.join(file_path, 'data', 'models', '{}.png'.format(MODEL_NAME))
+    plot_model(model, to_file=model_plot_file, show_shapes=True, show_layer_names=True)
+
+
+def load_glove_model():
+    print("loading embedding from " + GLOVE_FILE_NAME)
+    glove_path = os.path.join('glove models', GLOVE_FILE_NAME)
+    word2vec_path = os.path.join('glove models', GLOVE_FILE_NAME.replace('txt', 'tmp'))
+    model_path = os.path.join('glove models', GLOVE_FILE_NAME.replace('txt', 'pkl'))
+    if os.path.exists(model_path):
+        model_file = open(model_path, 'rb')
+        return pickle.load(model_file)
+    if not os.path.exists(word2vec_path):
+        _ = glove2word2vec(glove_path, word2vec_path)
+    glove_model = KeyedVectors.load_word2vec_format(word2vec_path)
+    model_file = open(model_path, 'wb')
+    pickle.dump(glove_model, model_file)
+    return glove_model
+
+
+def texts_to_word_sequences(articles, model):
+    sequences = []
+    for article in articles:
+        sequences.append(np.array([model.vocab[w].index + 1 if model.__contains__(w) else 0 for w in article.split()]))
+    return sequences
 
 
 def print_classes(dataset_type, y_data):
@@ -228,37 +155,11 @@ def print_classes(dataset_type, y_data):
             bots += 1
         else:
             humans += 1
+    print('----------------------------------------')
     print('dataset type: {}'.format(dataset_type))
+    print('dataset size: {}'.format(len(y_data)))
     print('bots length: {}'.format(bots))
     print('humans length: {}'.format(humans))
-
-
-def load_tokenizer(x_train, num_words=None):
-    file_path = os.path.join(pan_dir, 'data', 'tokenizers', 'tokenizer_{}.pickle'.format(num_words))
-    if os.path.isfile(file_path):
-        with open(file_path, 'rb') as tokenizer_file:
-            tokenizer = pickle.load(tokenizer_file)
-        logging.info('Tokenizer loaded from disk')
-        return tokenizer
-    else:
-        tokenizer = Tokenizer(num_words=num_words)
-        tokenizer.fit_on_texts(x_train)
-
-        with open(file_path, 'wb') as tokenizer_file:
-            pickle.dump(tokenizer, tokenizer_file, protocol=pickle.HIGHEST_PROTOCOL)
-        logging.info('Tokenizer fit on texts and stored on disk')
-
-        return tokenizer
-
-
-def load_glove_model():
-    print("loading embedding from " + glove_file_name)
-    glove_file = os.path.join(pan_dir, 'data', 'glove', glove_file_name)
-    word2vec_file = os.path.join(pan_dir, 'data', 'glove', glove_file_name.replace('txt','word2vect'))
-    if not os.path.exists(word2vec_file):
-        _ = glove2word2vec(glove_file, word2vec_file)
-    glove_model = KeyedVectors.load_word2vec_format(word2vec_file)
-    return glove_model
 
 
 def main():
@@ -273,51 +174,47 @@ def main():
                         help="Use this argument to set run on evaluation mode")
     args = parser.parse_args()
 
-    global pan_dir
-    pan_dir = args.path
-
-    logs_path = os.path.join(pan_dir, 'logs', 'glove_model_log.log')
+    global file_path
+    file_path = args.path
+    logs_path = os.path.join(file_path, 'logs')
+    if not os.path.exists(logs_path):
+        os.mkdir(logs_path)
+    logs_path = os.path.join(logs_path, MODEL_NAME + '.log')
     logging.basicConfig(filename=logs_path, filemode='w',
                         format='%(asctime)s : %(levelname)s : %(message)s', level=logging.INFO)
-
     evaluate_mode = args.evaluate
     learning_rate = float(args.learning_rate)
     batch_size = 32
     model_name = args.model
-    x_train, y_train, x_test, y_test = load_data()
-    print('Data loaded successfully')
+    x_train, y_train, x_test, y_test = load_data('dataset')
     lengths = np.array([len(text) for text in x_train])
     print('Count: {}'.format(len(lengths)))
+    print('Data loaded successfully')
+    print_classes("train", y_train)
+    print_classes("test", y_test)
     print('Min length: {}'.format(lengths.min()))
     print('Avg length: {}'.format(lengths.mean()))
     print('Std length: {}'.format(lengths.std()))
     print('Max length: {}'.format(lengths.max()))
     print('Count of sequences > 11000: {}'.format(len([length for length in lengths if length > 11000])))
-    print_classes("train", y_train)
-    print_classes("test", y_test)
 
     seq_length = int(lengths.mean() + lengths.std())
 
-    tokenizer = load_tokenizer(x_train)
+    glove_model = load_glove_model()
+    x_train = texts_to_word_sequences(x_train, glove_model)
+    x_test = texts_to_word_sequences(x_test, glove_model)
+    x_train = pad_sequences(x_train, maxlen=seq_length, padding='post', value=0)
+    x_test = pad_sequences(x_test, maxlen=seq_length, padding='post', value=0)
 
-    train_sequences = tokenizer.texts_to_sequences(x_train)
-    x_train = pad_sequences(train_sequences, maxlen=seq_length, padding='post')
-
-    val_sequences = tokenizer.texts_to_sequences(x_test)
-    x_test = pad_sequences(val_sequences, maxlen=seq_length, padding='post')
-
-    if model_name:
-      model = load_pretrained_model(model_name)
-    else:
-      model = define_conv_model(tokenizer, seq_length)
+    model = load_pretrained_model(model_name) if model_name else define_conv_model(glove_model)
 
     logging.info(model.summary())
 
     if evaluate_mode is True:
-      evaluate_model(model, x_test, y_test)
+        evaluate_model(model, x_test, y_test)
     else:
-      train_model(model, x_train, y_train, x_test, y_test, batch_size, learning_rate)
-      evaluate_model(model, x_test, y_test)
+        train_model(model, x_train, y_train, x_test, y_test, batch_size, learning_rate)
+        evaluate_model(model, x_test, y_test)
 
 
 if __name__ == "__main__":
